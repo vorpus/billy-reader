@@ -2,6 +2,8 @@
 
 A Firefox extension that adds pinyin annotations to Chinese text on web pages, backed by a local annotation service.
 
+[![Billy Reader demo](docs/thumbnail.jpg)](https://youtu.be/83euLmnp7tQ)
+
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (Python package manager)

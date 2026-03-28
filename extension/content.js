@@ -12,6 +12,14 @@ let annotating = false;
 let isAnnotated = false;
 let observer = null;
 const OBSERVER_DEBOUNCE_MS = 200;
+const observedShadowRoots = new WeakSet();
+
+function getShadowRoot(el) {
+  // Try in order: standard, Firefox extension privileged API, Xray unwrap
+  return el.shadowRoot
+    || el.openOrClosedShadowRoot
+    || el.wrappedJSObject?.shadowRoot;
+}
 
 // --- Message handling (M2 plumbing) ---
 
@@ -31,22 +39,30 @@ browser.runtime.onMessage.addListener((message) => {
 
 // --- DOM walking ---
 
-function collectTextNodes(root = document.body) {
+function walkTextNodes(root) {
   const nodes = [];
   const walker = document.createTreeWalker(
     root,
-    NodeFilter.SHOW_TEXT,
+    NodeFilter.SHOW_ALL,
     {
       acceptNode(node) {
-        let el = node.parentElement;
-        while (el) {
-          if (EXCLUDED_TAGS.has(el.tagName)) return NodeFilter.FILTER_REJECT;
-          if (el.hasAttribute("data-billy-annotated")) return NodeFilter.FILTER_REJECT;
-          el = el.parentElement;
+        if (node.nodeType === Node.TEXT_NODE) {
+          let el = node.parentElement;
+          while (el) {
+            if (EXCLUDED_TAGS.has(el.tagName)) return NodeFilter.FILTER_REJECT;
+            if (el.hasAttribute("data-billy-annotated")) return NodeFilter.FILTER_REJECT;
+            el = el.parentElement;
+          }
+          return CJK_RE.test(node.textContent)
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_SKIP;
         }
-        return CJK_RE.test(node.textContent)
-          ? NodeFilter.FILTER_ACCEPT
-          : NodeFilter.FILTER_REJECT;
+        // For element nodes, check if they have a shadow root we should enter
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (EXCLUDED_TAGS.has(node.tagName)) return NodeFilter.FILTER_REJECT;
+          if (node.hasAttribute("data-billy-annotated")) return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_SKIP;
       },
     }
   );
@@ -54,6 +70,40 @@ function collectTextNodes(root = document.body) {
   while (walker.nextNode()) {
     nodes.push(walker.currentNode);
   }
+  return nodes;
+}
+
+function injectShadowStyles(shadowRoot) {
+  if (shadowRoot.querySelector('[data-billy-styles]')) return;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = browser.runtime.getURL("styles.css");
+  link.setAttribute("data-billy-styles", "");
+  shadowRoot.prepend(link);
+}
+
+function collectTextNodes(root = document.body) {
+  const nodes = walkTextNodes(root);
+
+  // Find shadow roots within this root and collect their text nodes too
+  const elements = root.querySelectorAll ? root.querySelectorAll("*") : [];
+  for (const el of elements) {
+    const shadow = getShadowRoot(el);
+    if (shadow) {
+      injectShadowStyles(shadow);
+      nodes.push(...walkTextNodes(shadow));
+      // Recursively check for nested shadow roots
+      const nested = shadow.querySelectorAll("*");
+      for (const inner of nested) {
+        const innerShadow = getShadowRoot(inner);
+        if (innerShadow) {
+          injectShadowStyles(innerShadow);
+          nodes.push(...collectTextNodes(innerShadow));
+        }
+      }
+    }
+  }
+
   return nodes;
 }
 
@@ -241,9 +291,17 @@ function startObserver() {
         } else if (added.nodeType === Node.ELEMENT_NODE) {
           if (added.hasAttribute("data-billy-annotated")) continue;
           pendingNodes.push(...collectTextNodes(added));
+          // Watch new shadow roots
+          const shadow = getShadowRoot(added);
+          if (shadow) {
+            observeShadowRoot(shadow);
+          }
         }
       }
     }
+
+    // Scan for newly attached shadow roots
+    debouncedShadowScan();
 
     if (pendingNodes.length > 0) {
       clearTimeout(debounceTimer);
@@ -257,10 +315,59 @@ function startObserver() {
     }
   });
 
+  function scanForNewShadowRoots() {
+    const allShadows = findAllShadowRoots(document.body);
+    for (const shadow of allShadows) {
+      if (!observedShadowRoots.has(shadow)) {
+        observeShadowRoot(shadow);
+        const nodes = collectTextNodes(shadow);
+        if (nodes.length > 0) {
+          annotateNodes(nodes);
+        }
+      }
+    }
+  }
+
+  let shadowScanTimer = null;
+  function debouncedShadowScan() {
+    clearTimeout(shadowScanTimer);
+    shadowScanTimer = setTimeout(scanForNewShadowRoots, OBSERVER_DEBOUNCE_MS);
+  }
+
   observer.observe(document.body, {
     childList: true,
     subtree: true,
   });
+
+  // Initial scan + poll for late-arriving shadow roots
+  scanForNewShadowRoots();
+  setInterval(() => {
+    if (enabled) scanForNewShadowRoots();
+  }, 1000);
+}
+
+function observeShadowRoot(shadowRoot) {
+  if (!observer || observedShadowRoots.has(shadowRoot)) return;
+  observedShadowRoots.add(shadowRoot);
+  injectShadowStyles(shadowRoot);
+
+  observer.observe(shadowRoot, {
+    childList: true,
+    subtree: true,
+  });
+}
+
+// Recursively find all shadow roots in a tree, including nested ones
+function findAllShadowRoots(root, found = []) {
+  const elements = root.querySelectorAll ? root.querySelectorAll("*") : [];
+  for (const el of elements) {
+    const shadow = getShadowRoot(el);
+    if (shadow) {
+      found.push(shadow);
+      findAllShadowRoots(shadow, found);
+    }
+  }
+  return found;
 }
 
 // --- Keyboard shortcut: Alt+A ---
