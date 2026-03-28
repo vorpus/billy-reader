@@ -10,7 +10,7 @@ v0.1, March 2026
 |---|---|---|
 | Extension manifest | Manifest V2 | Stable on Firefox, simpler for MVP |
 | Extension ↔ service communication | Content script fetches localhost directly | FastAPI adds CORS headers; no background proxy needed |
-| Dynamic content handling | Annotate on page load only | Low migration cost to add MutationObserver later |
+| Dynamic content handling | MutationObserver + shadow root polling | Handles SPAs, infinite scroll, and deeply nested web components (e.g. Bilibili) |
 | Batch concurrency | Parallel, max 4 in-flight | Minimal code overhead, noticeably faster on text-heavy pages |
 | Toggle/restore | None — reload to revert | Eliminates DOM state management complexity |
 | Python tooling | uv | Fast, modern, no virtualenv ceremony |
@@ -23,9 +23,12 @@ v0.1, March 2026
 ```
 Firefox Extension (Manifest V2)
 ├── manifest.json
-├── content.js          ← DOM walker, ruby injector
-├── popup.html + popup.js  ← enable/disable toggle
-└── styles.css          ← ruby styling, phrase spacing
+├── content.js          ← DOM walker, ruby injector, MutationObserver, shadow DOM
+├── background.js       ← per-tab icon state management
+├── popup.html + popup.js  ← enable/disable toggle (reload-to-revert)
+├── styles.css          ← ruby styling, phrase spacing
+├── icon-on.png         ← toolbar icon (enabled)
+└── icon-off.png        ← toolbar icon (disabled)
 
         │ fetch (localhost:8000)
         ▼
@@ -44,13 +47,22 @@ Local Service (FastAPI + uvicorn)
 - FastAPI `/annotate` endpoint
 - CORS configured for extension origin
 
+**Also shipped (beyond original MVP scope):**
+- MutationObserver for dynamic content
+- Shadow DOM traversal (recursive, handles Bilibili's 5-level deep web components)
+- Shadow root polling for late-attaching shadow roots (no DOM event exists for this)
+- Firefox Xray vision workaround (`openOrClosedShadowRoot`)
+- Per-tab icon state via background script
+- Reload-to-revert when toggling off
+- `Alt+A` keyboard shortcut (`e.code` for macOS compat)
+- Batch `/annotate` API (`{ "texts": [...] }` → `{ "results": [...] }`)
+
 **Out (post-MVP):**
 - `/explain` endpoint + LLM
 - Per-character granularity toggle
-- Background script caching
+- Response caching
 - Per-domain overrides
 - Configurable settings (font size, spacing, pinyin style)
-- MutationObserver for dynamic content
 
 ---
 
@@ -154,12 +166,15 @@ extension/content.js
 
 ---
 
+## Lessons Learned
+
+- **Firefox Xray vision** blocks `element.shadowRoot` in content scripts even for open shadow roots. Use `element.openOrClosedShadowRoot` (Firefox extension privileged API) as fallback.
+- **Shadow roots can attach after element insertion.** No DOM event fires for this, so polling (`setInterval`) is the only reliable detection method.
+- **Bilibili comments** use 5 levels of nested shadow DOM (`bili-comments` → `bili-comment-thread-renderer` → `bili-comment-renderer` → `bili-rich-text`). Shadow root scanning must be fully recursive.
+- **macOS `Alt+A`** produces `å` via Option key, so `e.key === "a"` fails. Use `e.code === "KeyA"` instead.
+- **`rt` font-size 50%** is too small at body text ≤15px. Bumped to 60%.
+- **Styles don't penetrate shadow DOM.** Must inject stylesheet via `<link>` into each shadow root, requiring `web_accessible_resources` in the manifest.
+
 ## How to run
 
-```bash
-# Start the annotation service
-cd server && uv run uvicorn app:app --reload --port 8000
-
-# Load the extension
-# Firefox → about:debugging → This Firefox → Load Temporary Add-on → select extension/manifest.json
-```
+See `README.md` in the project root.

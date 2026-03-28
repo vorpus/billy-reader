@@ -1,5 +1,5 @@
 # Chinese Reading Assistant
-**Chrome Extension + Local Annotation Service**
+**Firefox Extension + Local Annotation Service**
 Product Requirements Document — v0.1, March 2026
 
 ---
