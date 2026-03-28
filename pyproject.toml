@@ -1,0 +1,11 @@
+[project]
+name = "billy-reader"
+version = "0.1.0"
+description = "Local Chinese text annotation service for the Billy Reader browser extension"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "jieba>=0.42",
+    "pypinyin>=0.53",
+]
