@@ -18,7 +18,8 @@ def _contains_cjk(text: str) -> bool:
 
 
 class AnnotateRequest(BaseModel):
-    text: str = Field(..., max_length=5000)
+    text: str | None = Field(default=None, max_length=5000)
+    texts: list[str] | None = Field(default=None)
 
 
 class Segment(BaseModel):
@@ -28,7 +29,8 @@ class Segment(BaseModel):
 
 
 class AnnotateResponse(BaseModel):
-    segments: list[Segment]
+    segments: list[Segment] | None = None
+    results: list[list[Segment]] | None = None
 
 
 @asynccontextmanager
@@ -52,11 +54,9 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/annotate", response_model=AnnotateResponse)
-def annotate(req: AnnotateRequest):
-    text = req.text
+def _annotate_text(text: str) -> list[Segment]:
     if not text or text.isspace():
-        return AnnotateResponse(segments=[])
+        return []
 
     words = jieba.lcut(text)
     segments: list[Segment] = []
@@ -69,4 +69,13 @@ def annotate(req: AnnotateRequest):
         else:
             segments.append(Segment(chars=word, pinyin=None, phrase_boundary=False))
 
-    return AnnotateResponse(segments=segments)
+    return segments
+
+
+@app.post("/annotate", response_model=AnnotateResponse)
+def annotate(req: AnnotateRequest):
+    if req.texts is not None:
+        results = [_annotate_text(t) for t in req.texts]
+        return AnnotateResponse(results=results)
+
+    return AnnotateResponse(segments=_annotate_text(req.text or ""))
