@@ -10,6 +10,8 @@ const EXCLUDED_TAGS = new Set([
 let enabled = false;
 let annotating = false;
 let isAnnotated = false;
+let observer = null;
+const OBSERVER_DEBOUNCE_MS = 200;
 
 // --- Message handling (M2 plumbing) ---
 
@@ -29,10 +31,10 @@ browser.runtime.onMessage.addListener((message) => {
 
 // --- DOM walking ---
 
-function collectTextNodes() {
+function collectTextNodes(root = document.body) {
   const nodes = [];
   const walker = document.createTreeWalker(
-    document.body,
+    root,
     NodeFilter.SHOW_TEXT,
     {
       acceptNode(node) {
@@ -168,6 +170,37 @@ async function fetchAnnotations(texts) {
   }
 }
 
+// --- Core annotation pipeline ---
+
+async function annotateNodes(textNodes) {
+  if (textNodes.length === 0) return;
+
+  const batches = batchNodes(textNodes);
+
+  const tasks = batches.map((batch) => async () => {
+    const texts = batch.nodes.map((n) => n.textContent);
+    const results = await fetchAnnotations(texts);
+
+    if (!results || results.length !== batch.nodes.length) {
+      console.warn("Billy Reader: response/node count mismatch");
+      return;
+    }
+
+    for (let i = 0; i < batch.nodes.length; i++) {
+      replaceTextNode(batch.nodes[i], results[i]);
+    }
+  });
+
+  await runPool(tasks, MAX_CONCURRENT);
+}
+
+async function checkHealth() {
+  const resp = await fetch(`${SERVICE_URL}/health`, {
+    signal: AbortSignal.timeout(2000),
+  }).catch(() => null);
+  return resp?.ok ?? false;
+}
+
 // --- Main annotation flow ---
 
 async function annotate() {
@@ -175,40 +208,59 @@ async function annotate() {
   annotating = true;
 
   try {
-    // Health check
-    const health = await fetch(`${SERVICE_URL}/health`, {
-      signal: AbortSignal.timeout(2000),
-    }).catch(() => null);
-
-    if (!health || !health.ok) {
+    if (!await checkHealth()) {
       console.warn("Billy Reader: annotation service not running");
       return;
     }
 
-    const textNodes = collectTextNodes();
-    if (textNodes.length === 0) return;
-
-    const batches = batchNodes(textNodes);
-
-    const tasks = batches.map((batch) => async () => {
-      const texts = batch.nodes.map((n) => n.textContent);
-      const results = await fetchAnnotations(texts);
-
-      if (!results || results.length !== batch.nodes.length) {
-        console.warn("Billy Reader: response/node count mismatch");
-        return;
-      }
-
-      for (let i = 0; i < batch.nodes.length; i++) {
-        replaceTextNode(batch.nodes[i], results[i]);
-      }
-    });
-
-    await runPool(tasks, MAX_CONCURRENT);
+    await annotateNodes(collectTextNodes());
     isAnnotated = true;
+    startObserver();
   } finally {
     annotating = false;
   }
+}
+
+// --- MutationObserver for dynamic content ---
+
+function startObserver() {
+  if (observer) return;
+
+  let pendingNodes = [];
+  let debounceTimer = null;
+
+  observer = new MutationObserver((mutations) => {
+    if (!enabled) return;
+
+    for (const mutation of mutations) {
+      for (const added of mutation.addedNodes) {
+        if (added.nodeType === Node.TEXT_NODE) {
+          if (CJK_RE.test(added.textContent) && !added.parentElement?.hasAttribute("data-billy-annotated")) {
+            pendingNodes.push(added);
+          }
+        } else if (added.nodeType === Node.ELEMENT_NODE) {
+          if (added.hasAttribute("data-billy-annotated")) continue;
+          pendingNodes.push(...collectTextNodes(added));
+        }
+      }
+    }
+
+    if (pendingNodes.length > 0) {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const nodes = pendingNodes.filter((n) => n.parentNode != null);
+        pendingNodes = [];
+        if (nodes.length > 0) {
+          annotateNodes(nodes);
+        }
+      }, OBSERVER_DEBOUNCE_MS);
+    }
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
 }
 
 // --- Keyboard shortcut: Alt+A ---
