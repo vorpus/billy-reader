@@ -1,0 +1,26 @@
+{
+  "manifest_version": 2,
+  "name": "Billy Reader",
+  "version": "0.1.0",
+  "description": "Pinyin annotations for Chinese text on any webpage.",
+
+  "permissions": [
+    "activeTab",
+    "storage",
+    "*://localhost/*"
+  ],
+
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "Billy Reader"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
