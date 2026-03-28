@@ -9,6 +9,7 @@ const EXCLUDED_TAGS = new Set([
 
 let enabled = false;
 let annotating = false;
+let isAnnotated = false;
 
 // --- Message handling (M2 plumbing) ---
 
@@ -38,7 +39,7 @@ function collectTextNodes() {
         let el = node.parentElement;
         while (el) {
           if (EXCLUDED_TAGS.has(el.tagName)) return NodeFilter.FILTER_REJECT;
-          if (el.classList.contains("billy-annotated")) return NodeFilter.FILTER_REJECT;
+          if (el.hasAttribute("data-billy-annotated")) return NodeFilter.FILTER_REJECT;
           el = el.parentElement;
         }
         return CJK_RE.test(node.textContent)
@@ -114,8 +115,10 @@ function buildAnnotatedFragment(segments) {
 
       for (let i = 0; i < seg.chars.length; i++) {
         const ruby = document.createElement("ruby");
+        ruby.setAttribute("data-billy", "");
         ruby.textContent = seg.chars[i];
         const rt = document.createElement("rt");
+        rt.setAttribute("data-billy", "");
         rt.textContent = seg.pinyin[i] || "";
         ruby.appendChild(rt);
         group.appendChild(ruby);
@@ -134,7 +137,7 @@ function replaceTextNode(textNode, segments) {
   if (!textNode.parentNode) return;
 
   const wrapper = document.createElement("span");
-  wrapper.className = "billy-annotated";
+  wrapper.setAttribute("data-billy-annotated", "");
   wrapper.dataset.original = textNode.textContent;
   wrapper.appendChild(buildAnnotatedFragment(segments));
   textNode.parentNode.replaceChild(wrapper, textNode);
@@ -168,6 +171,7 @@ async function fetchAnnotations(texts) {
 // --- Main annotation flow ---
 
 async function annotate() {
+  if (isAnnotated || annotating) return;
   annotating = true;
 
   try {
@@ -201,7 +205,27 @@ async function annotate() {
     });
 
     await runPool(tasks, MAX_CONCURRENT);
+    isAnnotated = true;
   } finally {
     annotating = false;
   }
 }
+
+// --- Keyboard shortcut: Alt+A ---
+
+document.addEventListener("keydown", (e) => {
+  if (!e.altKey || e.code !== "KeyA") return;
+
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || document.activeElement?.isContentEditable) {
+    return;
+  }
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (!isAnnotated && !annotating) {
+    enabled = true;
+    annotate();
+  }
+}, true);
