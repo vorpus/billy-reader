@@ -10,9 +10,18 @@
     "*://localhost/*"
   ],
 
+  "icons": {
+    "32": "icon-off.png"
+  },
+
   "browser_action": {
     "default_popup": "popup.html",
-    "default_title": "Billy Reader"
+    "default_title": "Billy Reader",
+    "default_icon": "icon-off.png"
+  },
+
+  "background": {
+    "scripts": ["background.js"]
   },
 
   "content_scripts": [

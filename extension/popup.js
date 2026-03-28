@@ -37,6 +37,10 @@ toggleBtn.addEventListener("click", async () => {
   const response = await sendToTab(tabId, { type: "TOGGLE" });
   if (response) {
     updateUI(response.enabled);
+    if (!response.enabled) {
+      browser.tabs.reload(tabId);
+      window.close();
+    }
   }
 });
 

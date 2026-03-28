@@ -21,6 +21,12 @@ function getShadowRoot(el) {
     || el.wrappedJSObject?.shadowRoot;
 }
 
+// --- Icon state ---
+
+function updateIcon() {
+  browser.runtime.sendMessage({ type: "SET_ICON", enabled });
+}
+
 // --- Message handling (M2 plumbing) ---
 
 browser.runtime.onMessage.addListener((message) => {
@@ -30,6 +36,7 @@ browser.runtime.onMessage.addListener((message) => {
 
   if (message.type === "TOGGLE") {
     enabled = !enabled;
+    updateIcon();
     if (enabled && !annotating) {
       annotate();
     }
@@ -385,6 +392,7 @@ document.addEventListener("keydown", (e) => {
 
   if (!isAnnotated && !annotating) {
     enabled = true;
+    updateIcon();
     annotate();
   }
 }, true);
